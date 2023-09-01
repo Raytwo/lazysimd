@@ -1,0 +1,12 @@
+[package]
+name = "lazysimd"
+version = "0.1.0"
+description = "AArch64 port of LazySIMD by uberhalit with changes by Sewer56"
+authors = ["Raytwo <raytwo@arcropolis.com>"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+lazysimd_macro = { path = "./lazysimd_macro" }
+skyline = { git = "https://github.com/Raytwo/skyline-rs", branch = "preview" }

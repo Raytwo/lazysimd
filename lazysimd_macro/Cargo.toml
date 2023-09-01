@@ -1,0 +1,18 @@
+[package]
+name = "lazysimd_macro"
+version = "0.1.0"
+authors = ["Raytwo <raytwo@arcropolis.com>"]
+edition = "2018"
+license = "MIT"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["extra-traits"] }
+quote = "1"
+proc-macro2 = "1"
+
+[features]
+std = []
+nso = []
