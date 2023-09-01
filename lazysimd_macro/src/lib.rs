@@ -46,8 +46,8 @@ pub fn from_pattern(attr: TokenStream, input: TokenStream) -> TokenStream {
     quote!(
         #visibility #sig {
             static OFFSETS: LazyLock<usize> = LazyLock::new(|| {
-                let text = $crate::scan::get_text();
-                $crate::get_offset_neon(&text, #pattern).unwrap()
+                let text = ::lazysimd::scan::get_text();
+                ::lazysimd::get_offset_neon(&text, #pattern).unwrap()
             });
 
             let inner = core::mem::transmute::<_,#inner_fn_type>(
