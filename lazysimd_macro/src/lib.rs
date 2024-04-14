@@ -45,7 +45,7 @@ pub fn from_pattern(attr: TokenStream, input: TokenStream) -> TokenStream {
     // Generate a shim for the function at the offset
     quote!(
         #visibility #sig {
-            static OFFSETS: LazyLock<usize> = LazyLock::new(|| {
+            static OFFSETS: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
                 let text = ::lazysimd::scan::get_text();
                 ::lazysimd::get_offset_neon(&text, #pattern).unwrap()
             });
