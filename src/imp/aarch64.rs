@@ -19,7 +19,7 @@ pub fn movemask(data: Vector128) -> u32 {
     // Fills a vector with UC_SHIFT
     let vshift = unsafe { vld1q_s8(UC_SHIFT.as_ptr()) };
     // Fills a vector with 0x80 and performs AND on the input vector
-    let vmask = unsafe { vandq_u8(input, vdupq_n_u8(0x80)) };
+    let vmask = unsafe { vandq_u8(data, vdupq_n_u8(0x80)) };
     // Shift-left vmask using UC_SHIFT
     let vmask = unsafe { vshlq_u8(vmask, vshift) };
 
