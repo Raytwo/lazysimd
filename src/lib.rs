@@ -29,7 +29,9 @@ pub fn find_pattern_neon<S: AsRef<str>>(data: *const u8, data_len: usize, patter
 
     // Fills a register with the first byte of the pattern
     let first_byte_vec = imp::vector128_create(pattern.bytes[pattern.leading_ignore_count]);
+    
     // Compute the size of the array minus what's the biggest size between the pattern or a Simd register
+    // TODO: Handle the case where the slice is smaller than a NEON register
     let search_length = data_len - std::cmp::max(pattern.bytes.len(), NEON_REGISTER_LENGTH);
 
     let leading_ignore_count = pattern.leading_ignore_count;
