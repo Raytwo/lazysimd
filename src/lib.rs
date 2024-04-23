@@ -1,6 +1,9 @@
 #![feature(int_roundings)]
 
 pub use lazysimd_macro::*;
+
+// TODO: Lock this behind a Switch flag or remove it entirely
+#[cfg(target_arch = "aarch64")]
 pub mod scan;
 
 #[cfg(target_arch = "aarch64")]
