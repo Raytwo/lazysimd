@@ -10,4 +10,5 @@ edition = "2021"
 [dependencies]
 lazysimd_macro = { path = "./lazysimd_macro" }
 
-skyline = "0.5.1"
+skyline = "0.6"
+
