@@ -1,9 +1,12 @@
 [package]
 name = "lazysimd_macro"
 version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MPL-2.0"
+description = "Proc-macro companion for the `lazysimd` signature-scanning crate. Generates `#[from_pattern]` shims for Skyline plugins."
 authors = ["Raytwo <raytwo@arcropolis.com>"]
-edition = "2018"
-license = "MIT"
+repository = "https://github.com/Raytwo/lazysimd"
 
 [lib]
 proc-macro = true

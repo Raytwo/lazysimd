@@ -1,9 +1,9 @@
-#![feature(int_roundings)]
-
 pub use lazysimd_macro::*;
 
-// TODO: Lock this behind a Switch flag or remove it entirely
+#[cfg(switch)]
 pub mod scan;
+
+mod scalar;
 
 #[cfg(target_arch = "aarch64")]
 #[path = "imp/aarch64.rs"]
@@ -13,6 +13,14 @@ mod imp;
 #[path = "imp/x86.rs"]
 mod imp;
 
+#[cfg(target_arch = "x86_64")]
+#[path = "imp/x86_avx2.rs"]
+mod imp_avx2;
+
+mod dispatch;
+
+pub use scalar::find_pattern_scalar;
+
 const NEON_REGISTER_LENGTH: usize = 16;
 
 pub fn get_offset_neon(data: &[u8], pattern: &str) -> Option<usize> {
@@ -21,62 +29,122 @@ pub fn get_offset_neon(data: &[u8], pattern: &str) -> Option<usize> {
 
 pub fn find_pattern_neon<S: AsRef<str>>(data: *const u8, data_len: usize, pattern: S) -> Option<usize> {
     let pattern = SimdPatternScanData::new(&pattern);
+    if pattern.bytes.is_empty() || data_len < pattern.bytes.len() {
+        return None;
+    }
+    let data_slice = unsafe { std::slice::from_raw_parts(data, data_len) };
+    find_pattern_in(data_slice, &pattern)
+}
 
-    let match_table = build_match_indexes(&pattern);
-    let pattern_vecs = pattern_to_vec(&pattern);
+pub fn find_pattern(data: &[u8], pattern: &str) -> Option<usize> {
+    dispatch::find(data, pattern)
+}
+
+pub fn get_offset(data: &[u8], pattern: &str) -> Option<usize> {
+    find_pattern(data, pattern)
+}
+
+pub(crate) fn find_pattern_in(data: &[u8], pattern: &SimdPatternScanData) -> Option<usize> {
+    if pattern.bytes.is_empty() || data.len() < pattern.bytes.len() {
+        return None;
+    }
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    {
+        let vec_count = pattern_vec_count(pattern);
+        // need enough headroom so inner load never reads past the end, see find_pattern_simd128
+        if data.len() >= (vec_count + 1) * NEON_REGISTER_LENGTH + 1 {
+            return find_pattern_simd128(data, pattern);
+        }
+    }
+    scalar::find_pattern_in(data, pattern)
+}
+
+#[inline]
+fn pattern_vec_count(pattern: &SimdPatternScanData) -> usize {
+    let mask_len = pattern.mask.len();
+    if mask_len <= 1 { 1 } else { (mask_len - 1).div_ceil(NEON_REGISTER_LENGTH) }
+}
+
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+fn find_pattern_simd128(data: &[u8], pattern: &SimdPatternScanData) -> Option<usize> {
+    let mut match_table = build_match_indexes(pattern);
+    // build_match_indexes returns mask.len() slots but only fills the literal ones,
+    // trailing zeros cause false rejects when bytes[1] is a wildcard so trim them off
+    let valid_match_count = pattern.mask.iter().skip(1).filter(|&&m| m != 0).count();
+    match_table.truncate(valid_match_count);
+    let pattern_vecs = pattern_to_vec(pattern);
     let match_table_len = match_table.len();
+    let vector_count = pattern_vecs.len();
 
-    // Fills a register with the first byte of the pattern
     let first_byte_vec = imp::vector128_create(pattern.bytes[pattern.leading_ignore_count]);
-    
-    // Compute the size of the array minus what's the biggest size between the pattern or a Simd register
-    // TODO: Handle the case where the slice is smaller than a NEON register
-    let search_length = data_len - std::cmp::max(pattern.bytes.len(), NEON_REGISTER_LENGTH);
-
     let leading_ignore_count = pattern.leading_ignore_count;
+    let data_len = data.len();
+    let data_base = data.as_ptr() as usize;
 
-    let mut data_ptr = data as usize;
-    let data_ptr_max = data_ptr + search_length;
+    // safe bound: outer load reads 16, trailing_zeros bumps up to +15, last inner load
+    // reads up to data_ptr + vector_count*16, so we need
+    // data_ptr + 15 + vector_count*16 < data_len
+    let safe_len = data_len - (vector_count + 1) * NEON_REGISTER_LENGTH;
+    let data_ptr_max = data_base + safe_len;
+    let mut data_ptr = data_base;
 
+    let data_end = data_base + data_len;
     'data: while data_ptr < data_ptr_max {
-        // Fills a register with bytes
+        // skim: while we have room for 4 windows, check all 4 via OR-reduce instead of
+        // 4 movemasks, skips 64 bytes per iter on no-hit and never advances past a hit
+        // so the slow path below handles the actual match
+        while data_ptr + 4 * NEON_REGISTER_LENGTH <= data_end {
+            let v0 = imp::load_vector128(data_ptr as *const u8);
+            let v1 = imp::load_vector128((data_ptr + NEON_REGISTER_LENGTH) as *const u8);
+            let v2 = imp::load_vector128((data_ptr + 2 * NEON_REGISTER_LENGTH) as *const u8);
+            let v3 = imp::load_vector128((data_ptr + 3 * NEON_REGISTER_LENGTH) as *const u8);
+            let e0 = imp::compare_equal(first_byte_vec, v0);
+            let e1 = imp::compare_equal(first_byte_vec, v1);
+            let e2 = imp::compare_equal(first_byte_vec, v2);
+            let e3 = imp::compare_equal(first_byte_vec, v3);
+            if imp::any_byte_set_4(e0, e1, e2, e3) {
+                break;
+            }
+            data_ptr += 4 * NEON_REGISTER_LENGTH;
+        }
+        if data_ptr >= data_ptr_max {
+            break;
+        }
+
         let rhs = imp::load_vector128(data_ptr as *const u8);
-
-        // Compare the register filled with the first byte with the 16 next bytes and return a vector where matching bytes are represented by 0xFF and the rest by 0x0
         let equal = imp::compare_equal(first_byte_vec, rhs);
+        let mut find_first_byte = imp::movemask(equal);
 
-        // Converts vceqq's output to a u32 bitfield equivalent where matching bytes are represented by a bit being set
-        let find_first_byte = imp::movemask(equal);
+        // mask out hits that'd anchor before data_ptr, those are positions we've already
+        // covered (or would underflow on first iter), without this a hit can drag
+        // data_ptr backwards and infinite-loop
+        if leading_ignore_count > 0 {
+            find_first_byte &= !((1u32 << leading_ignore_count) - 1);
+        }
 
-        // If the value is 0, it means no bit was set, and therefore the first byte of the signature is missing.
-        // Abort early and move on to the next 16 bytes
         if find_first_byte == 0 {
-            data_ptr += NEON_REGISTER_LENGTH - 1;
+            data_ptr += NEON_REGISTER_LENGTH;
             continue
         }
 
-        // Advance the pointer by the amount of non-matching bytes in the current window
-        let test = (find_first_byte.trailing_zeros() as i32).wrapping_sub(leading_ignore_count as i32);
-        data_ptr = data_ptr.wrapping_add_signed(test as isize);
+        let trailing = find_first_byte.trailing_zeros() as usize;
+        data_ptr = data_ptr + trailing - leading_ignore_count;
+        if data_ptr > data_ptr_max {
+            break;
+        }
 
         let mut match_table_index = 0;
-
-        // For each array of pattern
         for (i, cur_pattern_vec) in pattern_vecs.iter().enumerate() {
             let register_byte_offs = i * NEON_REGISTER_LENGTH;
-
             let next_byte = data_ptr + register_byte_offs + 1;
-
             let rhs_2 = imp::load_vector128(next_byte as _);
-
             let compare_result = imp::movemask(imp::compare_equal(*cur_pattern_vec, rhs_2));
 
             while match_table_index < match_table_len {
-                let match_index = std::num::Wrapping(match_table[match_table_index] as usize) - std::num::Wrapping(register_byte_offs);
-
+                let match_index = std::num::Wrapping(match_table[match_table_index] as usize)
+                    - std::num::Wrapping(register_byte_offs);
                 if match_index.0 < NEON_REGISTER_LENGTH {
                     if ((compare_result >> match_index.0) & 1) != 1 {
-                        // TODO: Improve this. Moves by one
                         data_ptr += 1;
                         continue 'data
                     } else {
@@ -84,26 +152,20 @@ pub fn find_pattern_neon<S: AsRef<str>>(data: *const u8, data_len: usize, patter
                         continue
                     }
                 }
-
                 break
             }
         }
 
-        return Some(data_ptr - data as usize)
+        return Some(data_ptr - data_base)
     }
 
-    None
-
-    // // We are past the point where we can still look for the signature without risking an overflow, so tread carefully
-    // let position = data_ptr - data as usize;
-
-    // // TODO: Do a simpler search in the remaining bytes here
-    // data_ptr - data as usize
+    // scalar handles whatever the SIMD bound left behind
+    scalar::find_pattern_from(data, pattern, safe_len)
 }
 
 pub fn pattern_to_vec(cb_pattern: &SimdPatternScanData) -> Vec<imp::Vector128> {
     let mut pattern_len = cb_pattern.mask.len();
-    let vector_count = (pattern_len - 1).div_ceil(NEON_REGISTER_LENGTH);
+    let vector_count = pattern_vec_count(cb_pattern);
     let mut pattern_vecs: Vec<imp::Vector128> = Vec::with_capacity(vector_count);
 
     let pattern = unsafe { cb_pattern.bytes.as_slice().get_unchecked(1) } as *const u8;
@@ -115,25 +177,14 @@ pub fn pattern_to_vec(cb_pattern: &SimdPatternScanData) -> Vec<imp::Vector128> {
             unsafe { pattern_vecs.push(imp::load_vector128(pattern.add(i * NEON_REGISTER_LENGTH))) }
         } else {
             let o = i * NEON_REGISTER_LENGTH;
-            let neon: &mut [u8; NEON_REGISTER_LENGTH] = &mut [0; NEON_REGISTER_LENGTH];
+            let mut neon: [u8; NEON_REGISTER_LENGTH] = [0; NEON_REGISTER_LENGTH];
 
             unsafe {
-                neon[0] = *pattern.add(o);
-                neon[1] = if o + 1 < pattern_len { *pattern.add(o + 1) } else { 0 };
-                neon[2] = if o + 2 < pattern_len { *pattern.add(o + 2) } else { 0 };
-                neon[3] = if o + 3 < pattern_len { *pattern.add(o + 3) } else { 0 };
-                neon[4] = if o + 4 < pattern_len { *pattern.add(o + 4) } else { 0 };
-                neon[5] = if o + 5 < pattern_len { *pattern.add(o + 5) } else { 0 };
-                neon[6] = if o + 6 < pattern_len { *pattern.add(o + 6) } else { 0 };
-                neon[7] = if o + 7 < pattern_len { *pattern.add(o + 7) } else { 0 };
-                neon[8] = if o + 8 < pattern_len { *pattern.add(o + 8) } else { 0 };
-                neon[9] = if o + 9 < pattern_len { *pattern.add(o + 9) } else { 0 };
-                neon[10] = if o + 10 < pattern_len { *pattern.add(o + 10) } else { 0 };
-                neon[11] = if o + 11 < pattern_len { *pattern.add(o + 11) } else { 0 };
-                neon[12] = if o + 12 < pattern_len { *pattern.add(o + 12) } else { 0 };
-                neon[13] = if o + 13 < pattern_len { *pattern.add(o + 13) } else { 0 };
-                neon[14] = if o + 14 < pattern_len { *pattern.add(o + 14) } else { 0 };
-                neon[15] = if o + 15 < pattern_len { *pattern.add(o + 15) } else { 0 };
+                for (j, slot) in neon.iter_mut().enumerate() {
+                    if o + j < pattern_len {
+                        *slot = *pattern.add(o + j);
+                    }
+                }
             }
 
             pattern_vecs.push(imp::load_vector128(neon.as_ptr()));
@@ -150,11 +201,9 @@ pub fn build_match_indexes(scan_pattern: &SimdPatternScanData) -> Vec<u16> {
     let mut match_count = 0;
 
     for i in 1..mask_length {
-        // If this byte is masked, we continue
         if scan_pattern.mask[i] != 1 {
             continue
         }
-        // Add the index of the byte that wasn't in the vector
         full_match_table[match_count] = i as u16 - 1;
         match_count += 1;
     }

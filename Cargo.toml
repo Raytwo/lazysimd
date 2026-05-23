@@ -1,14 +1,30 @@
 [package]
 name = "lazysimd"
 version = "0.1.0"
-description = "AArch64 port of LazySIMD by uberhalit with changes by Sewer56"
-authors = ["Raytwo <raytwo@arcropolis.com>"]
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+rust-version = "1.80"
+license = "MPL-2.0"
+description = "Fast SIMD byte-pattern (signature) scanner with AVX2/SSE2/NEON/scalar paths and an optional Skyline integration."
+authors = ["Raytwo <raytwo@arcropolis.com>"]
+repository = "https://github.com/Raytwo/lazysimd"
+readme = "README.md"
+keywords = ["simd", "pattern", "signature", "scan", "skyline"]
+categories = ["algorithms"]
+exclude = [
+    "Reloaded.Memory.SigScan/",
+    ".github/",
+]
 
 [dependencies]
-lazysimd_macro = { path = "./lazysimd_macro" }
+lazysimd_macro = { path = "./lazysimd_macro", version = "0.1" }
 
+[target.'cfg(all(target_arch = "aarch64", any(target_vendor = "switch", target_vendor = "nintendo", target_os = "switch", target_os = "horizon")))'.dependencies]
 skyline = "0.6"
 
+[dev-dependencies]
+criterion = "0.5"
+rand = "0.8"
+
+[[bench]]
+name = "find_pattern"
+harness = false
