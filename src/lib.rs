@@ -1,8 +1,3 @@
-pub use lazysimd_macro::*;
-
-#[cfg(switch)]
-pub mod scan;
-
 mod scalar;
 
 #[cfg(target_arch = "aarch64")]

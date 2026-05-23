@@ -2,12 +2,11 @@
 
 [![crates.io](https://img.shields.io/crates/v/lazysimd.svg)](https://crates.io/crates/lazysimd)
 
-Fast SIMD byte-pattern (signature) scanner for Rust. Originally a port of [uberhalit's LazySIMD](https://github.com/uberhalit) (with changes by [Sewer56](https://github.com/Sewer56)) used in [Reloaded.Memory.SigScan](https://github.com/Reloaded-Project/Reloaded.Memory.SigScan), now stable-Rust, cross-platform, and crates.io-ready.
+Fast portable SIMD byte-pattern (signature) scanner for Rust. Originally a port of [uberhalit's LazySIMD](https://github.com/uberhalit) (with changes by [Sewer56](https://github.com/Sewer56)) used in [Reloaded.Memory.SigScan](https://github.com/Reloaded-Project/Reloaded.Memory.SigScan), now stable-Rust and zero-dep.
 
-- **AVX2 / SSE2 / NEON / scalar** — automatic runtime dispatch on x86_64; NEON on aarch64; scalar everywhere else.
+- **AVX2 / SSE2 / NEON / scalar** with automatic runtime dispatch on x86_64. NEON on aarch64. Scalar everywhere else.
 - **No nightly required.**
-- **No mandatory `skyline` dependency** — pulled in only when building for the Skyline Switch target.
-- **`#[from_pattern]` proc-macro** — generates lazy offset-resolving shims for Skyline plugins, unchanged from upstream.
+- **Zero runtime dependencies.** No platform coupling, no proc-macros, just the scanner.
 
 ## Usage
 
@@ -29,23 +28,6 @@ Patterns are space-separated hex bytes; `??` is a wildcard. An optional `0x` pre
 | `find_pattern_scalar(&[u8], &str) -> Option<usize>` | Forces the portable scalar implementation. |
 | `get_offset_neon(&[u8], &str) -> Option<usize>` | Legacy name for the 128-bit SIMD path (NEON on aarch64, SSE2 on x86_64). Kept for backwards-compatibility. |
 | `get_offset(&[u8], &str) -> Option<usize>` | Alias for `find_pattern`. |
-
-### Skyline plugin example
-
-When the crate is built for the `aarch64-skyline-switch` target, the `scan` module and the `#[from_pattern]` macro become available:
-
-```rust,no_run
-# #[cfg(all(target_arch = "aarch64", target_vendor = "switch"))]
-# mod example {
-#[skyline::from_offset]
-extern "C" fn original_init();
-
-#[lazysimd::from_pattern("FF 83 02 D1 FD 7B 04 A9 FD 03 01 91")]
-fn init();   // resolved lazily by scanning the .text region the first time it's called
-# }
-```
-
-`scan::get_text()` returns the running module's `.text` section as a `&'static [u8]`; on non-Switch targets the module isn't compiled in.
 
 ## What's new compared to the original port
 

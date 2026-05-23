@@ -4,22 +4,15 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
 license = "MPL-2.0"
-description = "Fast SIMD byte-pattern (signature) scanner with AVX2/SSE2/NEON/scalar paths and an optional Skyline integration."
+description = "Fast portable SIMD byte-pattern (signature) scanner with AVX2/SSE2/NEON/scalar paths."
 authors = ["Raytwo <raytwo@arcropolis.com>"]
 repository = "https://github.com/Raytwo/lazysimd"
 readme = "README.md"
-keywords = ["simd", "pattern", "signature", "scan", "skyline"]
+keywords = ["simd", "pattern", "signature", "scan"]
 categories = ["algorithms"]
-exclude = [
-    "Reloaded.Memory.SigScan/",
-    ".github/",
-]
+exclude = [".github/"]
 
 [dependencies]
-lazysimd_macro = { path = "./lazysimd_macro", version = "0.1" }
-
-[target.'cfg(all(target_arch = "aarch64", any(target_vendor = "switch", target_vendor = "nintendo", target_os = "switch", target_os = "horizon")))'.dependencies]
-skyline = "0.6"
 
 [dev-dependencies]
 criterion = "0.5"
